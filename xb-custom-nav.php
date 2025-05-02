@@ -181,7 +181,7 @@ function xb_nav_display_page() {
                     <span class="xb-title">导航分类</span>
                     <span class="menu-close">×</span>
                 </div>
-                <ul>
+                <ul class="xb-nav-categories">
                     <?php foreach ($categories as $category): ?>
                         <li class="xb-category-item" data-category-id="<?php echo esc_attr($category->id); ?>">
                             <img src="<?php echo esc_url($category->icon); ?>" alt="<?php echo esc_attr($category->name); ?>" class="xb-category-icon" />
@@ -197,7 +197,7 @@ function xb_nav_display_page() {
             <!-- 左边分类栏（桌面端显示） -->
             <div class="xb-nav-sidebar">
                 <div class="xb-title">导航分类</div>
-                <ul>
+                <ul class="xb-nav-categories">
                     <?php foreach ($categories as $category): ?>
                         <li class="xb-category-item" data-category-id="<?php echo esc_attr($category->id); ?>">
                             <img src="<?php echo esc_url($category->icon); ?>" alt="<?php echo esc_attr($category->name); ?>" class="xb-category-icon" />
