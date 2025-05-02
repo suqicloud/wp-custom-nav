@@ -437,7 +437,7 @@
     margin: 0 auto;
     background: linear-gradient(45deg, #00c6fb, #005bea);
     color: #ffffff;
-    text-decoration: none;
+    text-decoration: none !important;
     border-radius: 25px;
     transition: all 0.3s ease;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
@@ -954,4 +954,30 @@
 
 .hot-panel::-webkit-scrollbar-thumb:hover {
     background: #555; /* 悬停时滑块颜色 */
+}
+/* 页面主标题 */
+.xb-page-title {
+    text-align: center;
+    font-size: 2.5rem;
+    color: #333333;
+    font-weight: 700;
+    margin-bottom: 30px;
+    background: linear-gradient(45deg, #00c6fb, #005bea);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    padding: 10px 0;
+}
+
+@media (max-width: 768px) {
+    .xb-page-title {
+        font-size: 1.8rem;
+        margin-bottom: 20px;
+    }
+}
+
+@media (max-width: 480px) {
+    .xb-page-title {
+        font-size: 1.5rem;
+    }
 }
