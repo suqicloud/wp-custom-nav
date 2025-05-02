@@ -147,7 +147,7 @@ function xb_nav_display_page() {
     ?>
     <div class="xb-nav-container">
         <?php if ($show_page_title === '1'): ?>
-            <div class="xb-title"><?php echo esc_html($page_title); ?></div>
+            <div class="xb-page-title"><?php echo esc_html($page_title); ?></div>
         <?php endif; ?>
 
         <!-- 搜索板块 -->
