@@ -448,6 +448,7 @@
 .xb-apply-btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+    color: #ffffff;
 }
 
 /* 文章列表 */
