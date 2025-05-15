@@ -17,7 +17,6 @@
     box-sizing: border-box;
     margin: 0;
     padding: 0;
-    text-decoration: none !important;
 }
 
 /* 页面标题 */
@@ -280,7 +279,6 @@
     color: #333;
     font-size: 14px;
     font-weight: 500;
-    margin-left: 10px;
 }
 
 /* 中间导航内容 */
@@ -330,9 +328,9 @@
 
 /* 导航图标 */
 .xb-nav-icon {
-    width: 40px !important;
-    height: 40px !important;
-    margin-right: 15px !important;
+    width: 40px;
+    height: 40px;
+    margin-right: 15px;
     border-radius: 8px;
     object-fit: cover;
 }
@@ -367,7 +365,7 @@
     text-overflow: ellipsis;
 }
 
-/* 导航描述（完整浮层显示，由 JS 控制） */
+/* 导航描述（完整浮层显示，由JS控制） */
 .xb-nav-desc-full {
     display: none;
     position: absolute;
@@ -439,7 +437,7 @@
     margin: 0 auto;
     background: linear-gradient(45deg, #00c6fb, #005bea);
     color: #ffffff;
-    text-decoration: none !important;
+    text-decoration: none;
     border-radius: 25px;
     transition: all 0.3s ease;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
@@ -448,7 +446,6 @@
 .xb-apply-btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
-    color: #ffffff;
 }
 
 /* 文章列表 */
@@ -958,35 +955,131 @@
 .hot-panel::-webkit-scrollbar-thumb:hover {
     background: #555; /* 悬停时滑块颜色 */
 }
-/* 页面主标题 */
-.xb-page-title {
+
+/* 导航热榜样式 */
+.xb-hotlist-widget {
+    background: #ffffff;
+    border-radius: 15px;
+    padding: 15px;
+    margin-bottom: 20px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.xb-hotlist-tabs {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 10px;
+}
+
+.xb-hotlist-tab {
+    padding: 8px 16px;
+    border: none;
+    background: #e0e0e0;
+    border-radius: 20px;
+    color: #333;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-weight: 500;
+}
+
+.xb-hotlist-tab:hover,
+.xb-hotlist-tab.active {
+    background: #1e90ff;
+    color: #ffffff;
+}
+
+.xb-hotlist-items {
+    list-style: none;
+}
+
+.xb-hotlist-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.xb-hotlist-rank {
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
     text-align: center;
-    font-size: 2.5rem;
-    color: #333333;
-    font-weight: 700;
-    margin-bottom: 30px;
-    background: linear-gradient(45deg, #00c6fb, #005bea);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-    padding: 10px 0;
+    background: #e0e0e0;
+    color: #333;
+    border-radius: 50%;
+    margin-right: 10px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.xb-hotlist-rank.top-rank {
+    background: #ff4d4d;
+    color: #ffffff;
+}
+
+.xb-hotlist-link {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    text-decoration: none;
+    color: #333;
+}
+
+.xb-hotlist-icon {
+    width: 24px;
+    height: 24px;
+    margin-right: 10px;
+    border-radius: 5px;
+}
+
+.xb-hotlist-name {
+    font-size: 14px;
+    font-weight: 500;
+}
+
+.xb-hotlist-count {
+    font-size: 12px;
+    color: #666;
+    margin-left: 10px;
 }
 
 @media (max-width: 768px) {
-    .xb-page-title {
-        font-size: 1.8rem;
-        margin-bottom: 20px;
+    .xb-hotlist-tab {
+        padding: 6px 12px;
+        font-size: 14px;
+    }
+
+    .xb-hotlist-item {
+        padding: 6px 0;
+    }
+
+    .xb-hotlist-rank {
+        width: 20px;
+        height: 20px;
+        line-height: 20px;
+        font-size: 12px;
+    }
+
+    .xb-hotlist-icon {
+        width: 20px;
+        height: 20px;
+    }
+
+    .xb-hotlist-name {
+        font-size: 13px;
+    }
+
+    .xb-hotlist-count {
+        font-size: 11px;
     }
 }
 
-@media (max-width: 480px) {
-    .xb-page-title {
-        font-size: 1.5rem;
-    }
+.xb-recommended-section {
+    border-bottom: 2px solid #eee;
+    margin-bottom: 20px;
+    padding-bottom: 20px;
 }
-/* 插件导航分类列表样式 */
-.xb-nav-categories {
-    list-style: none;
-    margin: 0 !important;
-    padding: 0;
+.xb-recommended-section .xb-title {
+    color: #d81e06; /* 推荐标题高亮颜色 */
+    font-size: 1.5em;
 }

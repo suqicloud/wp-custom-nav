@@ -3,7 +3,7 @@
 Plugin Name: 小半自定义网址导航
 Description: 自定义导航插件，支持分类导航、前台页面展示、公告、广告设置及LyToday-JS热搜榜插件。
 Plugin URI: https://www.jingxialai.com/4980.html
-Version: 1.0.1
+Version: 1.0.2
 Author: Summer
 License: GPL License
 Author URI: https://www.jingxialai.com/
@@ -30,6 +30,7 @@ function xb_nav_create_table() {
     global $wpdb;
     $table_nav = $wpdb->prefix . 'xb_nav';
     $table_category = $wpdb->prefix . 'xb_nav_categories';
+    $table_clicks = $wpdb->prefix . 'xb_nav_clicks';
     $charset_collate = $wpdb->get_charset_collate();
 
     // 导航分类表
@@ -39,7 +40,7 @@ function xb_nav_create_table() {
         icon VARCHAR(255) NOT NULL,
         PRIMARY KEY (id)
     ) $charset_collate;";
-    
+
     // 导航内容表
     $sql_nav = "CREATE TABLE IF NOT EXISTS $table_nav (
         id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -50,13 +51,45 @@ function xb_nav_create_table() {
         intro_url VARCHAR(255) NOT NULL,
         category_id BIGINT(20) UNSIGNED NOT NULL,
         redirect_to_intro TINYINT(1) DEFAULT 0,
+        order_num INT DEFAULT 0,
+        is_recommended TINYINT(1) DEFAULT 0,
         PRIMARY KEY (id),
         FOREIGN KEY (category_id) REFERENCES $table_category(id) ON DELETE CASCADE
     ) $charset_collate;";
 
-    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    // 导航点击统计表
+    $sql_clicks = "CREATE TABLE IF NOT EXISTS $table_clicks (
+        id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
+        nav_id BIGINT(20) UNSIGNED NOT NULL,
+        click_date DATE NOT NULL,
+        click_count BIGINT(20) UNSIGNED DEFAULT 0,
+        PRIMARY KEY (id),
+        UNIQUE KEY nav_date (nav_id, click_date),
+        FOREIGN KEY (nav_id) REFERENCES $table_nav(id) ON DELETE CASCADE
+    ) $charset_collate;";
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
     dbDelta($sql_category);
     dbDelta($sql_nav);
+    dbDelta($sql_clicks);
+
+    // 检查并添加 order_num 字段
+    $columns = $wpdb->get_results("SHOW COLUMNS FROM $table_nav LIKE 'order_num'");
+    if (empty($columns)) {
+        $wpdb->query("ALTER TABLE $table_nav ADD order_num INT DEFAULT 0 AFTER redirect_to_intro");
+    }
+
+    // 检查并添加 is_recommended 字段
+    $columns = $wpdb->get_results("SHOW COLUMNS FROM $table_nav LIKE 'is_recommended'");
+    if (empty($columns)) {
+        $wpdb->query("ALTER TABLE $table_nav ADD is_recommended TINYINT(1) DEFAULT 0 AFTER order_num");
+    }
+
+    // 确保点击统计表存在
+    $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_clicks'");
+    if (!$table_exists) {
+        $wpdb->query($sql_clicks);
+    }
 }
 
 // 创建前台页面，检查是否已有包含短代码的页面
@@ -109,12 +142,16 @@ function xb_nav_display_page() {
     global $wpdb;
     $table_nav = $wpdb->prefix . 'xb_nav';
     $table_category = $wpdb->prefix . 'xb_nav_categories';
+    $table_clicks = $wpdb->prefix . 'xb_nav_clicks';
 
     // 获取所有分类
     $categories = $wpdb->get_results("SELECT * FROM $table_category ORDER BY id ASC");
 
     // 获取所有导航
-    $navs = $wpdb->get_results("SELECT n.*, c.name as category_name FROM $table_nav n LEFT JOIN $table_category c ON n.category_id = c.id ORDER BY n.category_id ASC");
+    $navs = $wpdb->get_results("SELECT n.*, c.name as category_name FROM $table_nav n LEFT JOIN $table_category c ON n.category_id = c.id ORDER BY n.category_id ASC, n.order_num DESC");
+
+    // 获取推荐导航
+    $recommended_navs = $wpdb->get_results("SELECT n.*, c.name as category_name FROM $table_nav n LEFT JOIN $table_category c ON n.category_id = c.id WHERE n.is_recommended = 1 ORDER BY n.order_num DESC");
 
     // 获取设置
     $announcement = get_option('xb_nav_announcement', '');
@@ -129,6 +166,7 @@ function xb_nav_display_page() {
     $show_page_title = get_option('xb_nav_show_page_title', '1');
     $enable_clock = get_option('xb_nav_enable_clock', '0');
     $enable_lytoday = get_option('xb_nav_enable_lytoday', '0');
+    $enable_hotlist = get_option('xb_nav_enable_hotlist', '0');
     
     // 获取联系方式设置
     $contact_qq = get_option('xb_nav_contact_qq', '');
@@ -143,11 +181,65 @@ function xb_nav_display_page() {
     $contact_wechat_qr = get_option('xb_nav_contact_wechat_qr', '');
     $iconfont_url = get_option('xb_nav_iconfont_url', '');
 
+    // 获取热榜数据
+    $hotlist_data = array(
+        'daily' => array(),
+        'monthly' => array(),
+        'yearly' => array(),
+        'total' => array()
+    );
+
+    if ($enable_hotlist) {
+        // 日榜（今日）
+        $hotlist_data['daily'] = $wpdb->get_results($wpdb->prepare(
+            "SELECT n.id, n.name, n.url, n.icon, n.intro_url, n.redirect_to_intro, COALESCE(SUM(c.click_count), 0) as total_clicks
+            FROM $table_nav n
+            LEFT JOIN $table_clicks c ON n.id = c.nav_id AND DATE(c.click_date) = %s
+            GROUP BY n.id
+            HAVING total_clicks > 0
+            ORDER BY total_clicks DESC
+            LIMIT 10",
+            date_i18n('Y-m-d') // 使用 WordPress 本地时间
+        ));
+
+        // 月榜（本月）
+        $hotlist_data['monthly'] = $wpdb->get_results($wpdb->prepare(
+            "SELECT n.id, n.name, n.url, n.icon, SUM(c.click_count) as total_clicks
+            FROM $table_nav n
+            LEFT JOIN $table_clicks c ON n.id = c.nav_id
+            WHERE YEAR(c.click_date) = YEAR(CURDATE()) AND MONTH(c.click_date) = MONTH(CURDATE())
+            GROUP BY n.id
+            ORDER BY total_clicks DESC
+            LIMIT 10"
+        ));
+
+        // 年榜（本年）
+        $hotlist_data['yearly'] = $wpdb->get_results($wpdb->prepare(
+            "SELECT n.id, n.name, n.url, n.icon, SUM(c.click_count) as total_clicks
+            FROM $table_nav n
+            LEFT JOIN $table_clicks c ON n.id = c.nav_id
+            WHERE YEAR(c.click_date) = YEAR(CURDATE())
+            GROUP BY n.id
+            ORDER BY total_clicks DESC
+            LIMIT 10"
+        ));
+
+        // 总榜
+        $hotlist_data['total'] = $wpdb->get_results(
+            "SELECT n.id, n.name, n.url, n.icon, SUM(c.click_count) as total_clicks
+            FROM $table_nav n
+            LEFT JOIN $table_clicks c ON n.id = c.nav_id
+            GROUP BY n.id
+            ORDER BY total_clicks DESC
+            LIMIT 10"
+        );
+    }
+
     ob_start();
     ?>
     <div class="xb-nav-container">
         <?php if ($show_page_title === '1'): ?>
-            <div class="xb-page-title"><?php echo esc_html($page_title); ?></div>
+            <h1 class="entry-title"><?php echo esc_html($page_title); ?></h1>
         <?php endif; ?>
 
         <!-- 搜索板块 -->
@@ -178,10 +270,10 @@ function xb_nav_display_page() {
             <span class="menu-icon">☰</span>
             <div class="xb-mobile-menu-content">
                 <div class="xb-mobile-menu-header">
-                    <span class="xb-title">导航分类</span>
+                    <span class="xb-title">分类</span>
                     <span class="menu-close">×</span>
                 </div>
-                <ul class="xb-nav-categories">
+                <ul>
                     <?php foreach ($categories as $category): ?>
                         <li class="xb-category-item" data-category-id="<?php echo esc_attr($category->id); ?>">
                             <img src="<?php echo esc_url($category->icon); ?>" alt="<?php echo esc_attr($category->name); ?>" class="xb-category-icon" />
@@ -196,8 +288,8 @@ function xb_nav_display_page() {
         <div class="xb-nav-main">
             <!-- 左边分类栏（桌面端显示） -->
             <div class="xb-nav-sidebar">
-                <div class="xb-title">导航分类</div>
-                <ul class="xb-nav-categories">
+                <div class="xb-title">分类</div>
+                <ul>
                     <?php foreach ($categories as $category): ?>
                         <li class="xb-category-item" data-category-id="<?php echo esc_attr($category->id); ?>">
                             <img src="<?php echo esc_url($category->icon); ?>" alt="<?php echo esc_attr($category->name); ?>" class="xb-category-icon" />
@@ -208,29 +300,54 @@ function xb_nav_display_page() {
             </div>
 
             <!-- 中间导航内容 -->
-            <div class="xb-nav-content">
-                <?php
-                $current_category = '';
-                foreach ($navs as $nav):
-                    if ($nav->category_name !== $current_category):
-                        if ($current_category !== '') echo '</div></div>';
-                        $current_category = $nav->category_name;
-                        ?>
-                        <div class="xb-nav-section" id="category-<?php echo esc_attr($nav->category_id); ?>">
-                            <div class="xb-title"><?php echo esc_html($nav->category_name); ?></div>
-                            <div class="xb-nav-items">
-                    <?php endif; ?>
-                    <a href="<?php echo esc_url($nav->redirect_to_intro ? $nav->intro_url : $nav->url); ?>" target="_blank" class="xb-nav-item">
-                        <img src="<?php echo esc_url($nav->icon); ?>" alt="<?php echo esc_attr($nav->name); ?>" class="xb-nav-icon" />
-                        <div class="xb-nav-info">
-                            <div class="xb-nav-name"><?php echo esc_html($nav->name); ?></div>
-                            <div class="xb-nav-desc-short"><?php echo esc_html(wp_trim_words($nav->description, 10, '...')); ?></div>
-                            <div class="xb-nav-desc-full"><?php echo esc_html($nav->description); ?></div>
-                        </div>
-                    </a>
-                <?php endforeach; ?>
-                <?php if ($current_category !== '') echo '</div></div>'; ?>
+                <div class="xb-nav-content">
+        <!-- 推荐导航板块 -->
+        <?php if (!empty($recommended_navs)): ?>
+            <div class="xb-nav-section xb-recommended-section" id="recommended-navs">
+                <div class="xb-title">推荐</div>
+                <div class="xb-nav-items">
+                    <?php foreach ($recommended_navs as $nav): ?>
+                        <a href="<?php echo esc_url($nav->redirect_to_intro ? $nav->intro_url : $nav->url); ?>" 
+                           target="_blank" 
+                           class="xb-nav-item" 
+                           data-nav-id="<?php echo esc_attr($nav->id); ?>">
+                            <img src="<?php echo esc_url($nav->icon); ?>" alt="<?php echo esc_attr($nav->name); ?>" class="xb-nav-icon" />
+                            <div class="xb-nav-info">
+                                <div class="xb-nav-name"><?php echo esc_html($nav->name); ?></div>
+                                <div class="xb-nav-desc-short"><?php echo esc_html(wp_trim_words($nav->description, 10, '...')); ?></div>
+                                <div class="xb-nav-desc-full"><?php echo esc_html($nav->description); ?></div>
+                            </div>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
             </div>
+        <?php endif; ?>
+        
+        <?php
+        $current_category = '';
+        foreach ($navs as $nav):
+            if ($nav->category_name !== $current_category):
+                if ($current_category !== '') echo '</div></div>';
+                $current_category = $nav->category_name;
+                ?>
+                <div class="xb-nav-section" id="category-<?php echo esc_attr($nav->category_id); ?>">
+                    <div class="xb-title"><?php echo esc_html($nav->category_name); ?></div>
+                    <div class="xb-nav-items">
+            <?php endif; ?>
+            <a href="<?php echo esc_url($nav->redirect_to_intro ? $nav->intro_url : $nav->url); ?>" 
+               target="_blank" 
+               class="xb-nav-item" 
+               data-nav-id="<?php echo esc_attr($nav->id); ?>">
+                <img src="<?php echo esc_url($nav->icon); ?>" alt="<?php echo esc_attr($nav->name); ?>" class="xb-nav-icon" />
+                <div class="xb-nav-info">
+                    <div class="xb-nav-name"><?php echo esc_html($nav->name); ?></div>
+                    <div class="xb-nav-desc-short"><?php echo esc_html(wp_trim_words($nav->description, 10, '...')); ?></div>
+                    <div class="xb-nav-desc-full"><?php echo esc_html($nav->description); ?></div>
+                </div>
+            </a>
+        <?php endforeach; ?>
+        <?php if ($current_category !== '') echo '</div></div>'; ?>
+    </div>
 
             <!-- 右边小工具栏 -->
             <div class="xb-nav-widgets">
@@ -379,6 +496,43 @@ function xb_nav_display_page() {
                     </div>
                 <?php endif; ?>
 
+                <!-- 导航热榜 -->
+                <?php if ($enable_hotlist === '1'): ?>
+                    <div class="xb-widget xb-hotlist-widget">
+                    <div class="xb-title">热榜</div>
+                    <div class="xb-hotlist-tabs">
+                    <button class="xb-hotlist-tab active" data-type="daily">日榜</button>
+                    <button class="xb-hotlist-tab" data-type="monthly">月榜</button>
+                    <button class="xb-hotlist-tab" data-type="yearly">年榜</button>
+                    <button class="xb-hotlist-tab" data-type="total">总榜</button>
+                </div>
+                <?php foreach ($hotlist_data as $type => $items): ?>
+                    <div class="xb-hotlist-content" id="hotlist-<?php echo esc_attr($type); ?>" style="<?php echo $type === 'daily' ? '' : 'display: none;'; ?>">
+                    <?php if (empty($items)): ?>
+                        <p>暂无数据</p>
+                    <?php else: ?>
+                        <ul class="xb-hotlist-items">
+                            <?php foreach ($items as $index => $item): ?>
+                                <li class="xb-hotlist-item">
+                                    <span class="xb-hotlist-rank <?php echo $index < 3 ? 'top-rank' : ''; ?>"><?php echo $index + 1; ?></span>
+                                    <a href="<?php echo esc_url($item->redirect_to_intro ? $item->intro_url : $item->url); ?>" 
+                                       target="_blank" 
+                                        class="xb-hotlist-link" 
+                                       data-nav-id="<?php echo esc_attr($item->id); ?>">
+                                        <img src="<?php echo esc_url($item->icon); ?>" alt="<?php echo esc_attr($item->name); ?>" class="xb-hotlist-icon" />
+                                        <span class="xb-hotlist-name"><?php echo esc_html($item->name); ?></span>
+                                    </a>
+                                    <span class="xb-hotlist-count"><?php echo $item->total_clicks ?: 0; ?> 次</span>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    <?php endif; ?>
+
+
                 <!-- 导航数量 -->
                 <?php if ($show_nav_count): ?>
                     <div class="xb-widget">
@@ -455,7 +609,7 @@ function xb_nav_display_page() {
         <span id="xb-toast-message"></span>
     </div>
 
-    <!-- 手机端导航开关功能 -->
+    <!-- 手机端导航开关功能及提示框自动消失 -->
     <script>
         jQuery(document).ready(function($) {
             $('.xb-mobile-menu .menu-icon').on('click', function() {
@@ -464,8 +618,38 @@ function xb_nav_display_page() {
             $('.xb-mobile-menu .menu-close').on('click', function() {
                 $('.xb-mobile-menu-content').removeClass('active');
             });
+
+            // 自动消失的提示框
+            function showToast(message) {
+                const toast = $('#xb-toast');
+                $('#xb-toast-message').text(message);
+                toast.addClass('show');
+                setTimeout(() => {
+                    toast.removeClass('show');
+                }, 3000);
+            }
+            window.showToast = showToast;
         });
     </script>
+
+    <!-- 提示框样式 -->
+    <style>
+        .xb-toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #333;
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 5px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 1000;
+        }
+        .xb-toast.show {
+            opacity: 1;
+        }
+    </style>
     <?php
     return ob_get_clean();
 }
@@ -496,35 +680,77 @@ function xb_validate_url($url) {
     return filter_var($url, FILTER_VALIDATE_URL) !== false;
 }
 
+// 验证输入数据
+function xb_validate_input($data, $type, $max_length = 255) {
+    switch ($type) {
+        case 'text':
+            return strlen($data) <= $max_length ? sanitize_text_field($data) : false;
+        case 'url':
+            return xb_validate_url($data) && strlen($data) <= $max_length ? esc_url_raw($data) : false;
+        case 'textarea':
+            return sanitize_textarea_field($data);
+        case 'int':
+            return is_numeric($data) ? intval($data) : false;
+        case 'checkbox':
+            return $data ? 1 : 0;
+        default:
+            return false;
+    }
+}
+
 // 插件设置页面
 function xb_nav_settings_page() {
     if (isset($_POST['xb_nav_settings_submit'])) {
-        update_option('xb_nav_announcement', wp_kses_post($_POST['xb_nav_announcement']));
-        update_option('xb_nav_ad_content', wp_kses_post($_POST['xb_nav_ad_content']));
-        update_option('xb_nav_show_count', isset($_POST['xb_nav_show_count']) ? '1' : '0');
-        update_option('xb_nav_apply_url', esc_url_raw($_POST['xb_nav_apply_url']));
-        update_option('xb_nav_show_apply', isset($_POST['xb_nav_show_apply']) ? '1' : '0');
-        update_option('xb_nav_show_posts', isset($_POST['xb_nav_show_posts']) ? '1' : '0');
-        update_option('xb_nav_post_type', sanitize_text_field($_POST['xb_nav_post_type']));
-        update_option('xb_nav_post_count', intval($_POST['xb_nav_post_count']));
-        update_option('xb_nav_page_title', sanitize_text_field($_POST['xb_nav_page_title']));
-        update_option('xb_nav_show_page_title', isset($_POST['xb_nav_show_page_title']) ? '1' : '0');
-        update_option('xb_nav_background_color', sanitize_text_field($_POST['xb_nav_background_color']));
-        update_option('xb_nav_show_desc', isset($_POST['xb_nav_show_desc']) ? '1' : '0');
-        update_option('xb_nav_enable_clock', isset($_POST['xb_nav_enable_clock']) ? '1' : '0');
-        update_option('xb_nav_enable_lytoday', isset($_POST['xb_nav_enable_lytoday']) ? '1' : '0');
-        update_option('xb_nav_contact_qq', sanitize_text_field($_POST['xb_nav_contact_qq']));
-        update_option('xb_nav_contact_city', sanitize_text_field($_POST['xb_nav_contact_city']));
-        update_option('xb_nav_contact_email', sanitize_email($_POST['xb_nav_contact_email']));
-        update_option('xb_nav_contact_bilibili_url', esc_url_raw($_POST['xb_nav_contact_bilibili_url']));
-        update_option('xb_nav_contact_bilibili_text', sanitize_text_field($_POST['xb_nav_contact_bilibili_text']));
-        update_option('xb_nav_contact_weibo_url', esc_url_raw($_POST['xb_nav_contact_weibo_url']));
-        update_option('xb_nav_contact_netease_url', esc_url_raw($_POST['xb_nav_contact_netease_url']));
-        update_option('xb_nav_contact_xiaohongshu_qr', esc_url_raw($_POST['xb_nav_contact_xiaohongshu_qr']));
-        update_option('xb_nav_contact_douyin_qr', esc_url_raw($_POST['xb_nav_contact_douyin_qr']));
-        update_option('xb_nav_contact_wechat_qr', esc_url_raw($_POST['xb_nav_contact_wechat_qr']));
-        update_option('xb_nav_iconfont_url', xb_sanitize_iconfont_url($_POST['xb_nav_iconfont_url']));
-        echo '<div class="updated"><p>设置已保存！</p></div>';
+        $settings = array(
+            'xb_nav_announcement' => array('value' => $_POST['xb_nav_announcement'], 'type' => 'textarea'),
+            'xb_nav_ad_content' => array('value' => $_POST['xb_nav_ad_content'], 'type' => 'textarea'),
+            'xb_nav_show_count' => array('value' => isset($_POST['xb_nav_show_count']), 'type' => 'checkbox'),
+            'xb_nav_apply_url' => array('value' => $_POST['xb_nav_apply_url'], 'type' => 'url'),
+            'xb_nav_show_apply' => array('value' => isset($_POST['xb_nav_show_apply']), 'type' => 'checkbox'),
+            'xb_nav_show_posts' => array('value' => isset($_POST['xb_nav_show_posts']), 'type' => 'checkbox'),
+            'xb_nav_post_type' => array('value' => $_POST['xb_nav_post_type'], 'type' => 'text'),
+            'xb_nav_post_count' => array('value' => $_POST['xb_nav_post_count'], 'type' => 'int'),
+            'xb_nav_page_title' => array('value' => $_POST['xb_nav_page_title'], 'type' => 'text'),
+            'xb_nav_show_page_title' => array('value' => isset($_POST['xb_nav_show_page_title']), 'type' => 'checkbox'),
+            'xb_nav_background_color' => array('value' => $_POST['xb_nav_background_color'], 'type' => 'text'),
+            'xb_nav_show_desc' => array('value' => isset($_POST['xb_nav_show_desc']), 'type' => 'checkbox'),
+            'xb_nav_enable_clock' => array('value' => isset($_POST['xb_nav_enable_clock']), 'type' => 'checkbox'),
+            'xb_nav_enable_lytoday' => array('value' => isset($_POST['xb_nav_enable_lytoday']), 'type' => 'checkbox'),
+            'xb_nav_enable_hotlist' => array('value' => isset($_POST['xb_nav_enable_hotlist']), 'type' => 'checkbox'),
+            'xb_nav_contact_qq' => array('value' => $_POST['xb_nav_contact_qq'], 'type' => 'text'),
+            'xb_nav_contact_city' => array('value' => $_POST['xb_nav_contact_city'], 'type' => 'text'),
+            'xb_nav_contact_email' => array('value' => $_POST['xb_nav_contact_email'], 'type' => 'text'),
+            'xb_nav_contact_bilibili_url' => array('value' => $_POST['xb_nav_contact_bilibili_url'], 'type' => 'url'),
+            'xb_nav_contact_bilibili_text' => array('value' => $_POST['xb_nav_contact_bilibili_text'], 'type' => 'text'),
+            'xb_nav_contact_weibo_url' => array('value' => $_POST['xb_nav_contact_weibo_url'], 'type' => 'url'),
+            'xb_nav_contact_netease_url' => array('value' => $_POST['xb_nav_contact_netease_url'], 'type' => 'url'),
+            'xb_nav_contact_xiaohongshu_qr' => array('value' => $_POST['xb_nav_contact_xiaohongshu_qr'], 'type' => 'url'),
+            'xb_nav_contact_douyin_qr' => array('value' => $_POST['xb_nav_contact_douyin_qr'], 'type' => 'url'),
+            'xb_nav_contact_wechat_qr' => array('value' => $_POST['xb_nav_contact_wechat_qr'], 'type' => 'url'),
+            'xb_nav_iconfont_url' => array('value' => $_POST['xb_nav_iconfont_url'], 'type' => 'url', 'sanitize' => 'xb_sanitize_iconfont_url'),
+        );
+
+        foreach ($settings as $key => $config) {
+            $value = $config['value'];
+            if (isset($config['sanitize'])) {
+                $value = call_user_func($config['sanitize'], $value);
+            } else {
+                $value = xb_validate_input($value, $config['type']);
+            }
+            update_option($key, $value);
+        }
+        ?>
+        <div class="notice notice-success is-dismissible">
+            <p>设置已保存！</p>
+        </div>
+        <script>
+            jQuery(document).ready(function($) {
+                setTimeout(function() {
+                    $('.notice-success').fadeOut();
+                }, 3000);
+            });
+        </script>
+        <?php
     }
     ?>
     <div class="wrap">
@@ -566,6 +792,15 @@ function xb_nav_settings_page() {
                         <label>在前台底部显示 LyToday-JS 热搜榜，具体查看https://doc.lylme.com/spage/#/lytoday-js</label>
                     </td>
                 </tr>
+
+                <tr>
+                    <th scope="row">启用导航热榜</th>
+                    <td>
+                        <input type="checkbox" name="xb_nav_enable_hotlist" value="1" <?php checked(get_option('xb_nav_enable_hotlist', '0'), '1'); ?> />
+                        <label>在前台右侧显示导航热榜（日榜、月榜、年榜、总榜）</label>
+                    </td>
+                </tr>
+
                 <tr>
                     <th scope="row"><label for="xb_nav_iconfont_url">阿里Iconfont图标样式链接</label></th>
                     <td>
@@ -726,27 +961,22 @@ function xb_nav_add_page() {
 
     // 处理分类添加
     if (isset($_POST['xb_nav_add_category'])) {
-        $category_name = sanitize_text_field($_POST['category_name']);
-        $category_icon = esc_url_raw($_POST['category_icon']);
+        $category_name = xb_validate_input($_POST['category_name'], 'text');
+        $category_icon = xb_validate_input($_POST['category_icon'], 'url');
 
-        if (empty($category_name)) {
-            $message = '分类名称为必填项！';
-            $message_type = 'error';
-        } elseif (empty($category_icon) || !xb_validate_url($category_icon)) {
-            $message = '分类图标地址无效！';
-            $message_type = 'error';
-        } elseif (strlen($category_name) > 255 || strlen($category_icon) > 255) {
-            $message = '分类名称或图标地址过长！';
+        $errors = array();
+        if (!$category_name) $errors[] = '分类名称无效或过长！';
+        if (!$category_icon) $errors[] = '分类图标地址无效！';
+
+        if ($errors) {
+            $message = implode('<br>', $errors);
             $message_type = 'error';
         } else {
             try {
                 $wpdb->query('START TRANSACTION');
                 $result = $wpdb->insert(
                     $table_category,
-                    array(
-                        'name' => $category_name,
-                        'icon' => $category_icon,
-                    ),
+                    array('name' => $category_name, 'icon' => $category_icon),
                     array('%s', '%s')
                 );
 
@@ -765,28 +995,24 @@ function xb_nav_add_page() {
 
     // 处理分类编辑
     if (isset($_POST['xb_nav_edit_category'])) {
-        $category_id = intval($_POST['category_id']);
-        $category_name = sanitize_text_field($_POST['category_name']);
-        $category_icon = esc_url_raw($_POST['category_icon']);
+        $category_id = xb_validate_input($_POST['category_id'], 'int');
+        $category_name = xb_validate_input($_POST['category_name'], 'text');
+        $category_icon = xb_validate_input($_POST['category_icon'], 'url');
 
-        if (empty($category_name)) {
-            $message = '分类名称为必填项！';
-            $message_type = 'error';
-        } elseif (empty($category_icon) || !xb_validate_url($category_icon)) {
-            $message = '分类图标地址无效！';
-            $message_type = 'error';
-        } elseif (strlen($category_name) > 255 || strlen($category_icon) > 255) {
-            $message = '分类名称或图标地址过长！';
+        $errors = array();
+        if (!$category_id) $errors[] = '分类ID无效！';
+        if (!$category_name) $errors[] = '分类名称无效或过长！';
+        if (!$category_icon) $errors[] = '分类图标地址无效！';
+
+        if ($errors) {
+            $message = implode('<br>', $errors);
             $message_type = 'error';
         } else {
             try {
                 $wpdb->query('START TRANSACTION');
                 $result = $wpdb->update(
                     $table_category,
-                    array(
-                        'name' => $category_name,
-                        'icon' => $category_icon,
-                    ),
+                    array('name' => $category_name, 'icon' => $category_icon),
                     array('id' => $category_id),
                     array('%s', '%s'),
                     array('%d')
@@ -807,58 +1033,38 @@ function xb_nav_add_page() {
 
     // 处理导航添加
     if (isset($_POST['xb_nav_add_item'])) {
-        $nav_name = sanitize_text_field($_POST['nav_name']);
-        $nav_url = esc_url_raw($_POST['nav_url']);
-        $nav_icon = esc_url_raw($_POST['nav_icon']);
-        $nav_description = sanitize_textarea_field($_POST['nav_description']);
-        $nav_intro_url = esc_url_raw($_POST['nav_intro_url']);
-        $nav_category = intval($_POST['nav_category']);
-        $redirect_to_intro = isset($_POST['redirect_to_intro']) ? 1 : 0;
+        $nav_data = array(
+            'name' => xb_validate_input($_POST['nav_name'], 'text'),
+            'url' => xb_validate_input($_POST['nav_url'], 'url'),
+            'icon' => xb_validate_input($_POST['nav_icon'], 'url'),
+            'description' => xb_validate_input($_POST['nav_description'], 'textarea'),
+            'intro_url' => xb_validate_input($_POST['nav_intro_url'], 'url'),
+            'category_id' => xb_validate_input($_POST['nav_category'], 'int'),
+            'redirect_to_intro' => xb_validate_input(isset($_POST['redirect_to_intro']), 'checkbox'),
+            'order_num' => xb_validate_input($_POST['nav_order_num'], 'int') ?: 0,
+            'is_recommended' => xb_validate_input(isset($_POST['is_recommended']) ? 1 : 0, 'checkbox'),
+        );
 
-        // 验证必填字段
-        if (empty($nav_name)) {
-            $message = '导航名称为必填项！';
-            $message_type = 'error';
-        } elseif (empty($nav_url) || !xb_validate_url($nav_url)) {
-            $message = '导航地址无效！';
-            $message_type = 'error';
-        } elseif (empty($nav_icon) || !xb_validate_url($nav_icon)) {
-            $message = '导航图标地址无效！';
-            $message_type = 'error';
-        } elseif (empty($nav_description)) {
-            $message = '导航描述为必填项！';
-            $message_type = 'error';
-        } elseif (empty($nav_intro_url) || !xb_validate_url($nav_intro_url)) {
-            $message = '导航介绍地址无效！';
-            $message_type = 'error';
-        } elseif (empty($nav_category)) {
-            $message = '请选择导航分类！';
-            $message_type = 'error';
-        } elseif (strlen($nav_name) > 255 || strlen($nav_url) > 255 || strlen($nav_icon) > 255 || strlen($nav_intro_url) > 255) {
-            $message = '导航名称、地址、图标或介绍地址过长！';
+        $errors = array();
+        if (!$nav_data['name']) $errors[] = '导航名称无效或过长！';
+        if (!$nav_data['url']) $errors[] = '导航地址无效！';
+        if (!$nav_data['icon']) $errors[] = '导航图标地址无效！';
+        if (!$nav_data['description']) $errors[] = '导航描述无效！';
+        if (!$nav_data['intro_url']) $errors[] = '导航介绍地址无效！';
+        if (!$nav_data['category_id']) $errors[] = '请选择导航分类！';
+
+        if ($errors) {
+            $message = implode('<br>', $errors);
             $message_type = 'error';
         } else {
-            // 验证分类是否存在
-            $category_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_category WHERE id = %d", $nav_category));
+            $category_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_category WHERE id = %d", $nav_data['category_id']));
             if (!$category_exists) {
                 $message = '选择的分类不存在！';
                 $message_type = 'error';
             } else {
                 try {
                     $wpdb->query('START TRANSACTION');
-                    $result = $wpdb->insert(
-                        $table_nav,
-                        array(
-                            'name' => $nav_name,
-                            'url' => $nav_url,
-                            'icon' => $nav_icon,
-                            'description' => $nav_description,
-                            'intro_url' => $nav_intro_url,
-                            'category_id' => $nav_category,
-                            'redirect_to_intro' => $redirect_to_intro,
-                        ),
-                        array('%s', '%s', '%s', '%s', '%s', '%d', '%d')
-                    );
+                    $result = $wpdb->insert($table_nav, $nav_data, array('%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d'));
 
                     if ($result === false) {
                         throw new Exception('数据库错误：' . $wpdb->last_error);
@@ -890,9 +1096,16 @@ function xb_nav_add_page() {
     <div class="wrap">
         <h1>添加网址导航</h1>
         <?php if (!empty($message)): ?>
-            <div class="<?php echo esc_attr($message_type); ?>">
+            <div class="notice notice-<?php echo esc_attr($message_type); ?> is-dismissible">
                 <p><?php echo esc_html($message); ?></p>
             </div>
+            <script>
+                jQuery(document).ready(function($) {
+                    setTimeout(function() {
+                        $('.notice').fadeOut();
+                    }, 3000);
+                });
+            </script>
         <?php endif; ?>
 
         <!-- 添加分类 -->
@@ -1041,6 +1254,21 @@ function xb_nav_add_page() {
                             <p class="description">请选择导航所属的分类。</p>
                         </td>
                     </tr>
+                    <tr>
+                    <th scope="row"><label for="nav_order_num">导航顺序</label></th>
+                    <td>
+                        <input type="number" name="nav_order_num" id="nav_order_num" class="regular-text" value="0" min="0" />
+                        <p class="description">请输入导航顺序，数字越大越靠前，默认0。</p>
+                    </td>
+                </tr>
+                <tr>
+                    <th scope="row">推荐导航</th>
+                        <td>
+                            <input type="checkbox" name="is_recommended" id="is_recommended" value="1" />
+                            <label for="is_recommended">推荐此导航（将在前台顶部推荐板块显示）</label>
+                            <p class="description">勾选后，此导航将在前台顶部推荐导航板块显示，同时保留在原有分类中显示。</p>
+                        </td>
+                    </tr>
                 </table>
                 <p class="submit">
                     <input type="submit" name="xb_nav_add_item" class="button-primary" value="添加网址导航" />
@@ -1112,11 +1340,11 @@ function xb_nav_add_page() {
                         if (response.success) {
                             location.reload();
                         } else {
-                            alert(response.data.message || '删除失败。');
+                            window.showToast(response.data.message || '删除失败。');
                         }
                     },
                     error: function() {
-                        alert('请求失败，请检查网络。');
+                        window.showToast('请求失败，请检查网络。');
                     }
                 });
             });
@@ -1143,49 +1371,75 @@ function xb_nav_manage_page() {
 
     // 处理编辑
     if (isset($_POST['xb_nav_edit_item'])) {
-        $nav_id = intval($_POST['nav_id']);
-        $nav_name = sanitize_text_field($_POST['nav_name']);
-        $nav_url = esc_url_raw($_POST['nav_url']);
-        $nav_icon = esc_url_raw($_POST['nav_icon']);
-        $nav_description = sanitize_textarea_field($_POST['nav_description']);
-        $nav_intro_url = esc_url_raw($_POST['nav_intro_url']);
-        $nav_category = intval($_POST['nav_category']);
-        $redirect_to_intro = isset($_POST['redirect_to_intro']) ? 1 : 0;
+        $nav_data = array(
+            'id' => xb_validate_input($_POST['nav_id'], 'int'),
+            'name' => xb_validate_input($_POST['nav_name'], 'text'),
+            'url' => xb_validate_input($_POST['nav_url'], 'url'),
+            'icon' => xb_validate_input($_POST['nav_icon'], 'url'),
+            'description' => xb_validate_input($_POST['nav_description'], 'textarea'),
+            'intro_url' => xb_validate_input($_POST['nav_intro_url'], 'url'),
+            'category_id' => xb_validate_input($_POST['nav_category'], 'int'),
+            'redirect_to_intro' => xb_validate_input(isset($_POST['redirect_to_intro']), 'checkbox'),
+            'order_num' => xb_validate_input($_POST['nav_order_num'], 'int') ?: 0,
+            'is_recommended' => xb_validate_input(isset($_POST['is_recommended']) ? 1 : 0, 'checkbox'),
+        );
 
-        if (empty($nav_name)) {
-            echo '<div class="error"><p>网址导航名称为必填项！</p></div>';
-        } elseif (empty($nav_url) || !xb_validate_url($nav_url)) {
-            echo '<div class="error"><p>网址导航地址无效！</p></div>';
-        } elseif (empty($nav_icon) || !xb_validate_url($nav_icon)) {
-            echo '<div class="error"><p>网址导航图标地址无效！</p></div>';
-        } elseif (empty($nav_description)) {
-            echo '<div class="error"><p>网址导航描述为必填项！</p></div>';
-        } elseif (empty($nav_intro_url) || !xb_validate_url($nav_intro_url)) {
-            echo '<div class="error"><p>网址导航介绍地址无效！</p></div>';
-        } elseif (empty($nav_category)) {
-            echo '<div class="error"><p>请选择网址导航分类！</p></div>';
-        } elseif (strlen($nav_name) > 255 || strlen($nav_url) > 255 || strlen($nav_icon) > 255 || strlen($nav_intro_url) > 255) {
-            echo '<div class="error"><p>网址导航名称、地址、图标或介绍地址过长！</p></div>';
+        $errors = array();
+        if (!$nav_data['id']) $errors[] = '导航ID无效！';
+        if (!$nav_data['name']) $errors[] = '导航名称无效或过长！';
+        if (!$nav_data['url']) $errors[] = '导航地址无效！';
+        if (!$nav_data['icon']) $errors[] = '导航图标地址无效！';
+        if (!$nav_data['description']) $errors[] = '导航描述无效！';
+        if (!$nav_data['intro_url']) $errors[] = '导航介绍地址无效！';
+        if (!$nav_data['category_id']) $errors[] = '请选择导航分类！';
+
+
+        if ($errors) {
+            ?>
+            <div class="notice notice-error is-dismissible">
+                <p><?php echo esc_html(implode('<br>', $errors)); ?></p>
+            </div>
+            <script>
+                jQuery(document).ready(function($) {
+                    setTimeout(function() {
+                        $('.notice-error').fadeOut();
+                    }, 3000);
+                });
+            </script>
+            <?php
         } else {
-            $category_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_category WHERE id = %d", $nav_category));
+            $category_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_category WHERE id = %d", $nav_data['category_id']));
             if (!$category_exists) {
-                echo '<div class="error"><p>选择的分类不存在！</p></div>';
+                ?>
+                <div class="notice notice-error is-dismissible">
+                    <p>选择的分类不存在！</p>
+                </div>
+                <script>
+                    jQuery(document).ready(function($) {
+                        setTimeout(function() {
+                            $('.notice-error').fadeOut();
+                        }, 3000);
+                    });
+                </script>
+                <?php
             } else {
                 try {
                     $wpdb->query('START TRANSACTION');
                     $result = $wpdb->update(
                         $table_nav,
                         array(
-                            'name' => $nav_name,
-                            'url' => $nav_url,
-                            'icon' => $nav_icon,
-                            'description' => $nav_description,
-                            'intro_url' => $nav_intro_url,
-                            'category_id' => $nav_category,
-                            'redirect_to_intro' => $redirect_to_intro,
+                            'name' => $nav_data['name'],
+                            'url' => $nav_data['url'],
+                            'icon' => $nav_data['icon'],
+                            'description' => $nav_data['description'],
+                            'intro_url' => $nav_data['intro_url'],
+                            'category_id' => $nav_data['category_id'],
+                            'redirect_to_intro' => $nav_data['redirect_to_intro'],
+                            'order_num' => $nav_data['order_num'],
+                            'is_recommended' => $nav_data['is_recommended'],
                         ),
-                        array('id' => $nav_id),
-                        array('%s', '%s', '%s', '%s', '%s', '%d', '%d'),
+                        array('id' => $nav_data['id']),
+                        array('%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d'),
                         array('%d')
                     );
 
@@ -1193,10 +1447,32 @@ function xb_nav_manage_page() {
                         throw new Exception('数据库错误：' . $wpdb->last_error);
                     }
                     $wpdb->query('COMMIT');
-                    echo '<div class="updated"><p>导航已更新！</p></div>';
+                    ?>
+                    <div class="notice notice-success is-dismissible">
+                        <p>导航已更新！</p>
+                    </div>
+                    <script>
+                        jQuery(document).ready(function($) {
+                            setTimeout(function() {
+                                $('.notice-success').fadeOut();
+                            }, 3000);
+                        });
+                    </script>
+                    <?php
                 } catch (Exception $e) {
                     $wpdb->query('ROLLBACK');
-                    echo '<div class="error"><p>更新导航失败：' . esc_html($e->getMessage()) . '</p></div>';
+                    ?>
+                    <div class="notice notice-error is-dismissible">
+                        <p>更新导航失败：<?php echo esc_html($e->getMessage()); ?></p>
+                    </div>
+                    <script>
+                        jQuery(document).ready(function($) {
+                            setTimeout(function() {
+                                $('.notice-error').fadeOut();
+                            }, 3000);
+                        });
+                    </script>
+                    <?php
                 }
             }
         }
@@ -1273,6 +1549,21 @@ function xb_nav_manage_page() {
                                         <option value="<?php echo esc_attr($category->id); ?>"><?php echo esc_html($category->name); ?></option>
                                     <?php endforeach; ?>
                                 </select>
+                            </td>
+                        </tr>
+                        <tr>
+                        <th scope="row"><label for="edit-nav-order-num">导航顺序</label></th>
+                        <td>
+                            <input type="number" name="nav_order_num" id="edit-nav-order-num" class="regular-text" value="0" min="0" />
+                            <p class="description">请输入导航顺序，数字越大越靠前，默认0。</p>
+                        </td>
+                    </tr>
+                       <tr>
+                            <th scope="row">推荐导航</th>
+                            <td>
+                                <input type="checkbox" name="is_recommended" id="edit-is-recommended" value="1" />
+                                <label for="edit-is-recommended">推荐此导航（将在前台顶部推荐板块显示）</label>
+                                <p class="description">勾选后，此导航将在前台顶部推荐导航板块显示，同时保留在原有分类中显示。</p>
                             </td>
                         </tr>
                     </table>
@@ -1404,9 +1695,10 @@ function xb_nav_manage_page() {
                             $('#edit-nav-intro-url').val(item.intro_url);
                             $('#edit-nav-category').val(item.category_id);
                             $('#edit-redirect-to-intro').prop('checked', item.redirect_to_intro == 1);
+                            $('#edit-is-recommended').prop('checked', item.is_recommended == 1);
                             $('#xb-nav-edit-modal').show();
                         } else {
-                            alert(response.data.message || '获取导航数据失败。');
+                            window.showToast(response.data.message || '获取导航数据失败。');
                         }
                     }
                 });
@@ -1425,9 +1717,8 @@ function xb_nav_manage_page() {
                     success: function(response) {
                         if (response.success) {
                             loadNavList();
-                            alert(response.data.message || '删除成功！');
                         } else {
-                            alert(response.data.message || '删除失败。');
+                            window.showToast(response.data.message || '删除失败。');
                         }
                     }
                 });
@@ -1481,6 +1772,8 @@ function xb_nav_load_list() {
                     <th>地址</th>
                     <th>分类</th>
                     <th>跳转类型</th>
+                    <th>排序顺序</th>
+                    <th>是否推荐</th>
                     <th>操作</th>
                 </tr>
             </thead>
@@ -1491,6 +1784,8 @@ function xb_nav_load_list() {
                         <td><a href="<?php echo esc_url($nav->url); ?>" target="_blank"><?php echo esc_html($nav->url); ?></a></td>
                         <td><?php echo esc_html($nav->category_name ? $nav->category_name : '未分类'); ?></td>
                         <td><?php echo $nav->redirect_to_intro ? '先跳转介绍地址' : '直接跳转'; ?></td>
+                        <td><?php echo esc_html($nav->order_num); ?></td>
+                        <td><?php echo $nav->is_recommended ? '已推荐' : '未推荐'; ?></td>
                         <td>
                             <button class="xb-nav-edit button" data-id="<?php echo esc_attr($nav->id); ?>">编辑</button>
                             <button class="xb-nav-delete button" data-id="<?php echo esc_attr($nav->id); ?>">删除</button>
@@ -1556,7 +1851,7 @@ function xb_nav_delete_item() {
             throw new Exception('数据库错误：' . $wpdb->last_error);
         }
         $wpdb->query('COMMIT');
-        wp_send_json_success(array('message' => '导航已删除。'));
+        wp_send_json_success();
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');
         wp_send_json_error(array('message' => '删除失败：' . esc_html($e->getMessage())));
@@ -1573,30 +1868,123 @@ function xb_nav_delete_category() {
     $table_nav = $wpdb->prefix . 'xb_nav';
     $id = isset($_POST['id']) ? intval($_POST['id']) : 0;
 
+    if ($id <= 0) {
+        wp_send_json_error(array('message' => '分类ID无效。'));
+        return;
+    }
+
     // 检查分类下是否有导航
-    $nav_count = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_nav WHERE category_id = %d", $id));
+    $nav_count = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $table_nav WHERE category_id = %d",
+        $id
+    ));
+
     if ($nav_count > 0) {
-        wp_send_json_error(array('message' => '此分类下有导航，无法删除。'));
+        wp_send_json_error(array('message' => '该分类下有导航，无法删除。请先删除或移动导航。'));
+        return;
     }
 
     try {
         $wpdb->query('START TRANSACTION');
         $deleted = $wpdb->delete($table_category, array('id' => $id), array('%d'));
+
         if ($deleted === false) {
             throw new Exception('数据库错误：' . $wpdb->last_error);
         }
+
         $wpdb->query('COMMIT');
-        wp_send_json_success(array('message' => '分类已删除。'));
+        wp_send_json_success();
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');
         wp_send_json_error(array('message' => '删除失败：' . esc_html($e->getMessage())));
     }
 }
 
+// AJAX 记录导航点击
+add_action('wp_ajax_xb_nav_record_click', 'xb_nav_record_click');
+add_action('wp_ajax_nopriv_xb_nav_record_click', 'xb_nav_record_click');
+function xb_nav_record_click() {
+    global $wpdb;
+    $table_clicks = $wpdb->prefix . 'xb_nav_clicks';
+    $nav_id = isset($_POST['nav_id']) ? intval($_POST['nav_id']) : 0;
+    
+    if ($nav_id <= 0) {
+        wp_send_json_error(array('message' => '无效的导航ID'));
+        return;
+    }
+
+    // 验证导航是否存在
+    $table_nav = $wpdb->prefix . 'xb_nav';
+    $nav_exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table_nav WHERE id = %d", $nav_id));
+    if (!$nav_exists) {
+        wp_send_json_error(array('message' => '导航不存在'));
+        return;
+    }
+
+    // 使用 WordPress 本地时间，确保 click_date 正确
+    $current_date = date_i18n('Y-m-d');
+
+    try {
+        $wpdb->query('START TRANSACTION');
+        
+        $exists = $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM $table_clicks WHERE nav_id = %d AND DATE(click_date) = %s",
+            $nav_id,
+            $current_date
+        ));
+
+        if ($exists) {
+            $result = $wpdb->query($wpdb->prepare(
+                "UPDATE $table_clicks SET click_count = click_count + 1 
+                WHERE nav_id = %d AND DATE(click_date) = %s",
+                $nav_id,
+                $current_date
+            ));
+        } else {
+            $result = $wpdb->insert(
+                $table_clicks,
+                array(
+                    'nav_id' => $nav_id,
+                    'click_date' => $current_date,
+                    'click_count' => 1
+                ),
+                array('%d', '%s', '%d')
+            );
+        }
+
+        if ($result === false) {
+            throw new Exception('数据库错误：' . $wpdb->last_error);
+        }
+
+        $wpdb->query('COMMIT');
+        wp_send_json_success();
+    } catch (Exception $e) {
+        $wpdb->query('ROLLBACK');
+        wp_send_json_error(array('message' => '记录点击失败：' . esc_html($e->getMessage())));
+    }
+}
+
+// 清理过期点击数据（防止数据表过大）
+add_action('wp_scheduled_delete', 'xb_nav_cleanup_clicks');
+function xb_nav_cleanup_clicks() {
+    global $wpdb;
+    $table_clicks = $wpdb->prefix . 'xb_nav_clicks';
+    
+    // 删除超过一年的数据
+    $wpdb->query("DELETE FROM $table_clicks WHERE click_date < DATE_SUB(CURDATE(), INTERVAL 1 YEAR)");
+}
+
+// 注册每日清理任务
+add_action('wp', 'xb_nav_schedule_cleanup');
+function xb_nav_schedule_cleanup() {
+    if (!wp_next_scheduled('wp_scheduled_delete')) {
+        wp_schedule_event(time(), 'daily', 'wp_scheduled_delete');
+    }
+}
+
 // 插件卸载时删除相关设置项
 register_deactivation_hook(__FILE__, 'xb_nav_deactivate');
 function xb_nav_deactivate() {
-    // 删除插件相关的选项（仅限以xb_nav_开头的选项）
     $options = array(
         'xb_nav_announcement',
         'xb_nav_ad_content',
@@ -1612,6 +2000,7 @@ function xb_nav_deactivate() {
         'xb_nav_show_desc',
         'xb_nav_enable_clock',
         'xb_nav_enable_lytoday',
+        'xb_nav_enable_hotlist',
         'xb_nav_contact_qq',
         'xb_nav_contact_city',
         'xb_nav_contact_email',
@@ -1628,5 +2017,8 @@ function xb_nav_deactivate() {
     foreach ($options as $option) {
         delete_option($option);
     }
+    
+    // 清理定时任务
+    wp_clear_scheduled_hook('wp_scheduled_delete');
 }
 ?>
